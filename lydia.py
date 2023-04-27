@@ -1,9 +1,5 @@
 import pandas as pd
-from Adaboost import AdaBoost
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import GradientBoostingClassifier
 from rotation_forest import RotationForestClassifier
-from sklearn.ensemble import BaggingClassifier
 from bs4 import BeautifulSoup
 import urllib.parse
 from sklearn.ensemble import ExtraTreesClassifier
@@ -14,10 +10,10 @@ from sklearn import metrics
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
-import re
-import datetime
+from sklearn.metrics import accuracy_score
 import ssl
 import http.client
+import whois
 import warnings
 warnings.filterwarnings('ignore')
 import socket
@@ -129,23 +125,24 @@ class UrlFeaturizer:
                 return 0
         return 1
 
-    def is_domain_of_url_expiring_soon(self, days=365):
+    def is_domain_of_url_expiring_soon(self):
+        # Extract domain name from URL
         url=self.url
-        domain_name = url.split("//")[-1].split("/")[0]
-        response = requests.get("http://whois.domaintools.com/{}".format(domain_name))
-        pattern = r'Expiration Date:</div><div class="df-value">([^<]+)</div>'
-        match = re.search(pattern, response.text)
+        domain = urlparse(url).netloc
 
-        if match:
-            expiration_date_str = match.group(1)
-            expiration_date = datetime.datetime.strptime(expiration_date_str, "%Y-%m-%d %H:%M:%S UTC")
-            days_to_expiry = (expiration_date - datetime.datetime.now()).days
+        # Retrieve domain registration information
+        w = whois.whois(domain)
 
-            if days_to_expiry <= days:
-                return -1
+        # Extract expiration date
+        expiration_date = w.expiration_date
+        if type(expiration_date) == list:
+            expiration_date = expiration_date[0]
 
-        return 1
-
+        # Check if domain expires in less than 1 year
+        if expiration_date <= datetime.now() + timedelta(days=365):
+            return -1
+        else:
+            return 1
     def favicon(self):
         url=self.url
         response = requests.get(url)
@@ -165,6 +162,17 @@ class UrlFeaturizer:
                 return 1
         else:
             return 1
+    def non_standard_port(self):
+        return 1
+    def https(self):
+        url = self.url
+        parsed_url = urlparse(url)
+
+        if parsed_url.scheme == "https":
+            return -1
+        else:
+            return 1
+
 
     def run(self):
         sample=[]
@@ -177,27 +185,27 @@ class UrlFeaturizer:
         sample.append(self.dots_in_url())
         sample.append(self.is_secure_url())
         sample.append(self.is_domain_of_url_expiring_soon())
-        sample.append((self.favicon()))
+        sample.append(self.favicon())
+        sample.append(self.non_standard_port())
+        sample.append(self.https())
         print(sample)
         return(sample)
 
 
 
+
 df=pd.read_csv("C:\\Users\\HP\\data.csv")
-x=df.iloc[:,0:10]
+x=df.iloc[:,0:12]
 y=df.iloc[:,30]
 
 x_train, x_test, y_train, y_test =train_test_split(x,y,test_size=0.2)
 ab=AdaBoostClassifier()
 et=ExtraTreesClassifier()
-rf=RotationForestClassifier()
-lb=GradientBoostingClassifier(loss='exponential', max_depth=3)
-bag= BaggingClassifier(DecisionTreeClassifier(random_state=42), n_estimators=500,max_samples=100, bootstrap=True, n_jobs=-1, random_state=42)
-
+rf=RotationForestClassifier(num_trees=10, num_features_per_subset=3, random_state=42)
 #AdaModel=AdaBoostClassifier(n_estimators=100,learning_rate=1)
 #extra_tree_forest = ExtraTreesClassifier(n_estimators = 5,criterion ='entropy', max_features = 2)
 base_models = [
-    ('Adaboost', ab),('LogitBoost', lb)
+    ('Adaboost', ab),('Rotation Forest', rf)
     ]
 
 #model_1=AdaModel.fit(x_train,y_train)
@@ -215,5 +223,5 @@ input=[a]
 model=stacked.fit(x_train, y_train)
 stacked_prediction = stacked.predict(input)
 output = cross_val_score(stacked, x,y)
-print("Accuracy",max(output))
+print("Accuracy",max(output)*100)
 print(stacked_prediction)
